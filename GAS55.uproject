@@ -3,6 +3,16 @@
 	"EngineAssociation": "5.5",
 	"Category": "Samples",
 	"Description": "",
+	"Modules": [
+		{
+			"Name": "GAS55",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine"
+			]
+		}
+	],
 	"Plugins": [
 		{
 			"Name": "ModelingToolsEditorMode",
