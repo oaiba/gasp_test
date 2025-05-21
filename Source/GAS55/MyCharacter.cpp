@@ -343,6 +343,11 @@ void AMyCharacter::PerformAttack(const FName& AttackCode)
 	if (AnimInst)
 	{
 		AnimInst->Montage_Play(AnimPair->AttackerMontage);
+		if (!(AnimPair->VictimRelativeTransformToAttacker.Equals(FTransform::Identity)))
+		{
+			// OnHandleApplyVictimRelativeTransform(AnimPair->VictimRelativeTransformToAttacker);
+			ApplyVictimRelativeTransform(CurrentAttackTarget, AnimPair->VictimRelativeTransformToAttacker);
+		}
 		if (CurrentAttackTarget)
 		{
 			UE_LOG(LogTemp, Log, TEXT("%s performing '%s'. Target: %s"), *GetName(),
@@ -388,12 +393,6 @@ void AMyCharacter::ProcessAttackHit()
 
 	if (CurrentAttackTarget->GetClass()->ImplementsInterface(UCombatInterface::StaticClass()))
 	{
-		if (!(AnimPair->VictimRelativeTransformToAttacker.Equals(FTransform::Identity)))
-		{
-			// OnHandleApplyVictimRelativeTransform(AnimPair->VictimRelativeTransformToAttacker);
-			ApplyVictimRelativeTransform(CurrentAttackTarget, AnimPair->VictimRelativeTransformToAttacker);
-		}
-
 		Execute_OnHitReceived(CurrentAttackTarget, this, AnimPair->VictimReactionMontage);
 	}
 	else
@@ -412,12 +411,21 @@ void AMyCharacter::ApplyVictimRelativeTransform(AMyCharacter* Victim, const FTra
 	// Victim->SetActorLocationAndRotation(VictimTargetWorldTransform.GetLocation(),
 	// 									VictimTargetWorldTransform.GetRotation(),
 	// 									false, nullptr, ETeleportType::TeleportPhysics);
-	Victim->OnHandleApplyVictimRelativeTransform(
-		FTransform(VictimTargetWorldTransform.GetRotation(), VictimTargetWorldTransform.GetLocation(),
-		           FVector::ZeroVector));
+	const FTransform TargetTransform = FTransform(VictimTargetWorldTransform.GetRotation(), VictimTargetWorldTransform.GetLocation(),
+	               FVector::ZeroVector);
+	Victim->TargetRelativeTransform = TargetTransform;
 
 	UE_LOG(LogTemp, Log, TEXT("Teleported Victim %s to relative transform for combo %s"), *Victim->GetName(),
 	       *CurrentExecutingComboName.ToString());
+}
+
+void AMyCharacter::HandleApplyVictimRelativeTransform()
+{
+	const FTransform& RelativeTransform = CurrentAttackTarget->TargetRelativeTransform;
+	if (CurrentAttackTarget)
+	{
+		CurrentAttackTarget->SetActorLocationAndRotation(RelativeTransform.GetLocation(), RelativeTransform.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+	}
 }
 
 void AMyCharacter::OnHitReceived_Implementation(AActor* Attacker, UAnimMontage* VictimReactionMontageToPlay)

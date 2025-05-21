@@ -71,7 +71,10 @@ public:
 	virtual void Tick(float DeltaTime) override;
 
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
-
+	
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
+	FTransform TargetRelativeTransform;
+	
 	/**
 	 * Finds all AMyCharacter instances (excluding self) that are within a specified yaw angle
 	 * (horizontal cone) and range relative to this character's forward direction.
@@ -135,6 +138,9 @@ public:
 	
 	UFUNCTION(BlueprintImplementableEvent)
 	void OnHandleApplyVictimRelativeTransform(const FTransform& RelativeTransform);
+
+	UFUNCTION(BlueprintCallable)
+	void HandleApplyVictimRelativeTransform();
 
 	// virtual void TriggerHitReaction_Implementation(FName HitReactionMontageSection, AActor* Attacker, FVector HitImpactPoint) override;
 	
