@@ -3,6 +3,7 @@
 
 #include "MyCharacter.h"
 
+#include "Components/CapsuleComponent.h"
 #include "GameFramework/PawnMovementComponent.h"
 #include "Interface/CombatInterface.h"
 #include "Kismet/GameplayStatics.h"
@@ -16,9 +17,12 @@ void AMyCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+	if (GetMesh() != nullptr)
 	{
-		AnimInstance->OnMontageEnded.AddDynamic(this, &AMyCharacter::OnMontageEndedEvent);
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			AnimInstance->OnMontageEnded.AddDynamic(this, &AMyCharacter::OnMontageEndedEvent);
+		}
 	}
 }
 
@@ -338,6 +342,29 @@ void AMyCharacter::PerformAttack(const FName& AttackCode)
 
 	CurrentAttackTarget = BestTarget;
 
+    const FVector MyLocation = GetActorLocation();
+    const FVector TargetLocation = CurrentAttackTarget->GetActorLocation();
+    
+    const FVector DirectionToTarget = (TargetLocation - MyLocation).GetSafeNormal();
+    const FRotator LookAtRotationForSelf = DirectionToTarget.Rotation();
+    
+    FRotator CurrentSelfActorRotation = GetActorRotation();
+    CurrentSelfActorRotation.Yaw = LookAtRotationForSelf.Yaw;
+    SetActorRotation(CurrentSelfActorRotation);
+	if (AController* MyController = GetController())
+	{
+		FRotator CurrentControllerRotation = MyController->GetControlRotation();
+		CurrentControllerRotation.Yaw = LookAtRotationForSelf.Yaw;
+		CurrentControllerRotation.Pitch = LookAtRotationForSelf.Pitch;
+		MyController->SetControlRotation(CurrentControllerRotation);
+	}
+    const FVector DirectionFromTargetToSelf = (MyLocation - TargetLocation).GetSafeNormal();
+    FRotator LookAtRotationForTarget = DirectionFromTargetToSelf.Rotation();
+
+    FRotator CurrentTargetActorRotation = CurrentAttackTarget->GetActorRotation();
+    CurrentTargetActorRotation.Yaw = LookAtRotationForTarget.Yaw;
+    CurrentAttackTarget->SetActorRotation(CurrentTargetActorRotation);
+
 	CurrentExecutingComboName = AttackCode;
 
 	if (AnimInst)
@@ -352,6 +379,18 @@ void AMyCharacter::PerformAttack(const FName& AttackCode)
 		{
 			UE_LOG(LogTemp, Log, TEXT("%s performing '%s'. Target: %s"), *GetName(),
 			       *CurrentExecutingComboName.ToString(), *CurrentAttackTarget->GetName());
+
+			UCapsuleComponent* SelfCapsule = GetCapsuleComponent();
+			UCapsuleComponent* TargetCapsule = CurrentAttackTarget->GetCapsuleComponent();
+
+			if (SelfCapsule && TargetCapsule)
+			{
+				SelfCapsule->IgnoreActorWhenMoving(CurrentAttackTarget, true);
+				TargetCapsule->IgnoreActorWhenMoving(this, true);
+
+				UE_LOG(LogTemp, Log, TEXT("[%s::%hs] - Set %s and %s to ignore each other's movement collision."),
+					*GetName(),__FUNCTION__, *GetName(), *CurrentAttackTarget->GetName());
+			}
 		}
 		else
 		{
@@ -424,7 +463,9 @@ void AMyCharacter::HandleApplyVictimRelativeTransform()
 	const FTransform& RelativeTransform = CurrentAttackTarget->TargetRelativeTransform;
 	if (CurrentAttackTarget)
 	{
-		CurrentAttackTarget->SetActorLocationAndRotation(RelativeTransform.GetLocation(), RelativeTransform.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+		// CurrentAttackTarget->SetActorLocationAndRotation(RelativeTransform.GetLocation(), RelativeTransform.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+		// CurrentAttackTarget->GetMesh()->SetWorldLocationAndRotation(RelativeTransform.GetLocation(), RelativeTransform.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+		CurrentAttackTarget->OnHandleApplyVictimRelativeTransform(RelativeTransform);
 	}
 }
 
@@ -484,8 +525,37 @@ void AMyCharacter::OnMontageEndedEvent(UAnimMontage* Montage, bool bInterrupted)
 			       TEXT("%s AttackerMontage for combo '%s' ended. Interrupted: %d. Clearing target and combo name."),
 			       *GetName(), *CurrentExecutingComboName.ToString(), bInterrupted);
 
+			if (CurrentAttackTarget)
+			{
+				UE_LOG(LogTemp, Log, TEXT("%s performing '%s'. Target: %s"), *GetName(),
+					   *CurrentExecutingComboName.ToString(), *CurrentAttackTarget->GetName());
+
+				UCapsuleComponent* SelfCapsule = GetCapsuleComponent();
+				UCapsuleComponent* TargetCapsule = CurrentAttackTarget->GetCapsuleComponent();
+
+				if (SelfCapsule && TargetCapsule)
+				{
+					SelfCapsule->IgnoreActorWhenMoving(CurrentAttackTarget, true);
+					TargetCapsule->IgnoreActorWhenMoving(this, true);
+
+					UE_LOG(LogTemp, Log, TEXT("[%s::%hs] - Set %s and %s to ignore each other's movement collision."),
+						*GetName(),__FUNCTION__, *GetName(), *CurrentAttackTarget->GetName());
+				}
+				else
+				{
+					if (!SelfCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - SelfCapsule is NULL."), *GetName(), __FUNCTION__);
+					if (!TargetCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - TargetCapsule on %s is NULL."), *GetName(), __FUNCTION__, *CurrentAttackTarget->GetName());
+				}		
+			}
+			else
+			{
+				UE_LOG(LogTemp, Log, TEXT("%s performing '%s' (no specific target)."), *GetName(),
+					   *CurrentExecutingComboName.ToString());
+			}
+			
 			CurrentAttackTarget = nullptr;
 			CurrentExecutingComboName = NAME_None;
 		}
 	}
 }
+
