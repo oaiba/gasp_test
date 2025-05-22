@@ -521,15 +521,22 @@ void AMyCharacter::OnHitReceived_Implementation(AActor* Attacker, UAnimMontage* 
 	}
 }
 
-TArray<AActor*> AMyCharacter::FindActorsInSphereToPull(const float SphereRadius, const TSubclassOf<UInterface> RequiredInterface,
-	const bool bEnableDebugDraw)
+TArray<AActor*> AMyCharacter::FindActorsInSphereToPull(const float SphereRadius,
+                                                       const TSubclassOf<UInterface> RequiredInterface,
+                                                       const bool bEnableDebugDraw)
 {
 	TArray<AActor*> FoundActors;
+	if (!CurrentAttackTarget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::%hs] CurrentAttackTarget is NULL. Cannot find actors around it."),
+		       *GetName(), __FUNCTION__);
+		return FoundActors;
+	}
 	const FVector SelfLocation = CurrentAttackTarget->GetActorLocation();
 
 	TArray<FOverlapResult> OverlapResults;
 	const FCollisionShape SphereShape = FCollisionShape::MakeSphere(SphereRadius);
-    
+
 	const FCollisionObjectQueryParams ObjectQueryParams(ECC_TO_BITFIELD(ECC_WorldDynamic) | ECC_TO_BITFIELD(ECC_Pawn));
 
 	const bool bOverlap = GetWorld()->OverlapMultiByObjectType(
@@ -563,70 +570,90 @@ TArray<AActor*> AMyCharacter::FindActorsInSphereToPull(const float SphereRadius,
 					FoundActors.Add(OverlappedActor);
 					if (bEnableDebugDraw)
 					{
-						DrawDebugLine(GetWorld(), SelfLocation, OverlappedActor->GetActorLocation(), FColor::Green, false, 5.0f, 0, 1.0f);
+						DrawDebugLine(GetWorld(), SelfLocation, OverlappedActor->GetActorLocation(), FColor::Green,
+						              false, 5.0f, 0, 1.0f);
 					}
 				}
 			}
 		}
 	}
-	
+
 	UE_LOG(LogTemp, Log, TEXT("[%s::FindActorsInSphereToPull] Found %d actors."), *GetName(), FoundActors.Num());
 	return FoundActors;
 }
 
-bool AMyCharacter::PrepareGroupPull(const TArray<AActor*>& ActorsToPull, FVector TargetCentroidOffsetFromPlayer)
+bool AMyCharacter::PrepareGroupPull(const TArray<AActor*>& ActorsToPull, const FVector TargetCentroidOffsetFromPlayer)
 {
-	    if (bIsGroupPullActive)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] A group pull is already active."), *GetName());
-        return false;
-    }
-    if (ActorsToPull.IsEmpty())
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] ActorsToPull array is empty."), *GetName());
-        return false;
-    }
+	if (bIsGroupPullActive)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] A group pull is already active."), *GetName());
+		return false;
+	}
 
-    ActivelyPulledActors.Empty();
-    Pull_Group_InitialWorldCentroid = FVector::ZeroVector;
-    int32 ValidActorCount = 0;
+	if (ActorsToPull.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] ActorsToPull array is empty."), *GetName());
+		return false;
+	}
 
-    for (const AActor* Actor : ActorsToPull)
-    {
-        if (Actor && Actor != this) 
-        {
-            Pull_Group_InitialWorldCentroid += Actor->GetActorLocation();
-            ValidActorCount++;
-        }
-    }
+	if (!CurrentAttackTarget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] CurrentAttackTarget is NULL."), *GetName());
+		return false;
+	}
 
-    if (ValidActorCount == 0)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] No valid actors to form a group."), *GetName());
-        return false;
-    }
-    Pull_Group_InitialWorldCentroid /= ValidActorCount;
+	ActivelyPulledActors.Empty();
+	Pull_Group_InitialWorldCentroid = FVector::ZeroVector;
+	int32 ValidActorCount = 0;
 
-    for (AActor* Actor : ActorsToPull)
-    {
-        if (Actor && Actor != this)
-        {
-            FVector Offset = Actor->GetActorLocation() - Pull_Group_InitialWorldCentroid;
-            ActivelyPulledActors.Add(FPulledActorGroupInfo(Actor, Offset));
-        }
-    }
-    
-    if (ActivelyPulledActors.IsEmpty()) { 
-        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] No actors were ultimately added to the pull list."), *GetName());
-        return false;
-    }
+	for (const AActor* Actor : ActorsToPull)
+	{
+		if (Actor && Actor != this)
+		{
+			Pull_Group_InitialWorldCentroid += Actor->GetActorLocation();
+			ValidActorCount++;
+		}
+	}
 
-    Pull_Group_TargetWorldCentroid = GetActorLocation() + TargetCentroidOffsetFromPlayer;
-    
-    bIsGroupPullActive = true;
-    UE_LOG(LogTemp, Log, TEXT("[%s::PrepareGroupPull] Prepared pull for %d actors. InitialCentroid: %s, TargetCentroid: %s"),
-        *GetName(), ActivelyPulledActors.Num(), *Pull_Group_InitialWorldCentroid.ToString(), *Pull_Group_TargetWorldCentroid.ToString());
-    return true;
+	if (ValidActorCount == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] No valid actors to form a group."), *GetName());
+		return false;
+	}
+
+	Pull_Group_InitialWorldCentroid /= ValidActorCount;
+
+	for (AActor* Actor : ActorsToPull)
+	{
+		if (Actor && Actor != this)
+		{
+			FVector Offset = Actor->GetActorLocation() - Pull_Group_InitialWorldCentroid;
+			ActivelyPulledActors.Add(FPulledActorGroupInfo(Actor, Offset));
+		}
+	}
+
+	if (ActivelyPulledActors.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] No actors were ultimately added to the pull list."),
+		       *GetName());
+		return false;
+	}
+
+	const FVector FromTargetToSelf = GetActorLocation() - CurrentAttackTarget->GetActorLocation();
+	const float Distance = FromTargetToSelf.Size();
+	const FVector Direction = FromTargetToSelf.GetSafeNormal();
+
+	Pull_Group_TargetWorldCentroid = Pull_Group_InitialWorldCentroid + Direction * Distance +
+		TargetCentroidOffsetFromPlayer;
+
+	bIsGroupPullActive = true;
+
+	UE_LOG(LogTemp, Log, TEXT("[%s::PrepareGroupPull] Prepared pull for %d actors."), *GetName(),
+	       ActivelyPulledActors.Num());
+	UE_LOG(LogTemp, Log, TEXT("  InitialCentroid: %s"), *Pull_Group_InitialWorldCentroid.ToString());
+	UE_LOG(LogTemp, Log, TEXT("  TargetCentroid:  %s"), *Pull_Group_TargetWorldCentroid.ToString());
+
+	return true;
 }
 
 void AMyCharacter::UpdateGroupPullLerp(float Alpha)
@@ -638,16 +665,17 @@ void AMyCharacter::UpdateGroupPullLerp(float Alpha)
 
 	const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
 
-	const FVector CurrentLerpedCentroid = FMath::Lerp(Pull_Group_InitialWorldCentroid, Pull_Group_TargetWorldCentroid, ClampedAlpha);
+	const FVector CurrentLerpedCentroid = FMath::Lerp(Pull_Group_InitialWorldCentroid, Pull_Group_TargetWorldCentroid,
+	                                                  ClampedAlpha);
 
-	if (bIsDrawDebug) 
+	if (bIsDrawDebug)
 	{
-		DrawDebugSphere(GetWorld(), Pull_Group_InitialWorldCentroid, 50.f, 12, FColor::Red, false, -1, 0, 2.f); 
-		DrawDebugSphere(GetWorld(), Pull_Group_TargetWorldCentroid, 50.f, 12, FColor::Blue, false, -1, 0, 2.f); 
+		DrawDebugSphere(GetWorld(), Pull_Group_InitialWorldCentroid, 50.f, 12, FColor::Red, false, -1, 0, 2.f);
+		DrawDebugSphere(GetWorld(), Pull_Group_TargetWorldCentroid, 50.f, 12, FColor::Blue, false, -1, 0, 2.f);
 		DrawDebugSphere(GetWorld(), CurrentLerpedCentroid, 40.f, 12, FColor::Yellow, false, -1, 0, 3.f);
 	}
-	
-	for (int32 i = ActivelyPulledActors.Num() - 1; i >= 0; --i) 
+
+	for (int32 i = ActivelyPulledActors.Num() - 1; i >= 0; --i)
 	{
 		const FPulledActorGroupInfo& PulledInfo = ActivelyPulledActors[i];
 		if (PulledInfo.Actor.IsValid())
@@ -659,7 +687,8 @@ void AMyCharacter::UpdateGroupPullLerp(float Alpha)
 		else
 		{
 			ActivelyPulledActors.RemoveAt(i);
-			UE_LOG(LogTemp, Warning, TEXT("[%s::UpdateGroupPullLerp] Pulled actor became invalid, removed from list."), *GetName());
+			UE_LOG(LogTemp, Warning, TEXT("[%s::UpdateGroupPullLerp] Pulled actor became invalid, removed from list."),
+			       *GetName());
 		}
 	}
 }
@@ -668,7 +697,8 @@ void AMyCharacter::FinishGroupPull()
 {
 	if (bIsGroupPullActive)
 	{
-		UE_LOG(LogTemp, Log, TEXT("[%s::FinishGroupPull] Group pull finished. Clearing active pull state."), *GetName());
+		UE_LOG(LogTemp, Log, TEXT("[%s::FinishGroupPull] Group pull finished. Clearing active pull state."),
+		       *GetName());
 	}
 	bIsGroupPullActive = false;
 	ActivelyPulledActors.Empty();
@@ -706,7 +736,7 @@ void AMyCharacter::OnMontageEndedEvent(UAnimMontage* Montage, bool bInterrupted)
 				else
 				{
 					if (!SelfCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - SelfCapsule is NULL."), *GetName(),
-					                         __FUNCTION__);
+					                         __FUNCTION__)					;
 					if (!TargetCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - TargetCapsule on %s is NULL."),
 					                           *GetName(), __FUNCTION__, *CurrentAttackTarget->GetName());
 				}

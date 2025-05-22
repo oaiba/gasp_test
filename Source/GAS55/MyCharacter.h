@@ -46,9 +46,14 @@ struct FPulledActorGroupInfo
 	UPROPERTY()
 	FVector InitialOffsetFromCentroid;
 
-	FPulledActorGroupInfo() : Actor(nullptr), InitialOffsetFromCentroid(FVector::ZeroVector) {}
+	FPulledActorGroupInfo() : Actor(nullptr), InitialOffsetFromCentroid(FVector::ZeroVector)
+	{
+	}
+
 	FPulledActorGroupInfo(AActor* InActor, const FVector& InOffset)
-		: Actor(InActor), InitialOffsetFromCentroid(InOffset) {}
+		: Actor(InActor), InitialOffsetFromCentroid(InOffset)
+	{
+	}
 };
 
 UCLASS()
@@ -61,14 +66,14 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
-	
+
 	// --- Combat Properties ---
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Animation Data")
 	TMap<FName, FCombatAnimationPair> CombatAnimationDatabase;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Combat")
 	FName CurrentExecutingComboName;
-	
+
 	UPROPERTY(BlueprintReadOnly, Category = "Combat")
 	AMyCharacter* CurrentAttackTarget;
 
@@ -83,7 +88,7 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat")
 	float BaseMagnitude = 1000.0f;
-	
+
 	UPROPERTY(EditDefaultsOnly, Category = "Combat")
 	bool bShouldScaleWithDistance = true;
 
@@ -96,10 +101,10 @@ public:
 	virtual void Tick(float DeltaTime) override;
 
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
-	
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
 	FTransform TargetRelativeTransform;
-	
+
 	/**
 	 * Finds all AMyCharacter instances (excluding self) that are within a specified yaw angle
 	 * (horizontal cone) and range relative to this character's forward direction.
@@ -122,7 +127,7 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Character|Combat")
 	AMyCharacter* SelectBestAttackTargetFromList(const TArray<AMyCharacter*>& PotentialTargets,
-	                                            bool bInDrawDebug = false);
+	                                             bool bInDrawDebug = false);
 
 	/**
 	 * Executes an attack action for the character based on a provided attack code.
@@ -150,7 +155,7 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Character|Combat")
 	void ProcessAttackHit();
-	
+
 	/**
 	 * Adjusts the victim's position and rotation to align with a relative transform based on the attacker's current transform.
 	 * This is typically used to synchronize the victim's position/orientation with the attack animation.
@@ -189,7 +194,7 @@ public:
 	void HandleApplyVictimRelativeTransform();
 
 	// virtual void TriggerHitReaction_Implementation(FName HitReactionMontageSection, AActor* Attacker, FVector HitImpactPoint) override;
-	
+
 	/**
 	 * Handles the reaction of this character when hit by an attacker.
 	 * Plays the specified reaction animation montage if valid and stops any conflicting montages.
@@ -211,18 +216,24 @@ public:
 	 * @return An array of actors within the specified sphere radius that match the given criteria.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Abilities|Direct Group Pull")
-	TArray<AActor*> FindActorsInSphereToPull(float SphereRadius, TSubclassOf<UInterface> RequiredInterface, bool bEnableDebugDraw);
+	TArray<AActor*> FindActorsInSphereToPull(float SphereRadius, TSubclassOf<UInterface> RequiredInterface,
+	                                         bool bEnableDebugDraw);
 
 	/**
-	 * Prepares a group of actors for a coordinated pull action by calculating the initial and target centroids.
-	 * Ensures that the actors are valid and generates relative offsets for each actor's position from the initial group centroid.
+	 * Prepares a group of actors to be pulled towards a calculated target location relative to the player.
+	 * Ensures the pull operation is ready with a defined set of actors and their intended destination.
 	 *
-	 * @param ActorsToPull The array of actors that will be part of the group pull. Invalid actors and the caller itself are excluded.
-	 * @param TargetCentroidOffsetFromPlayer Offset relative to the caller's location to compute the target centroid for the group pull.
-	 * @return True if the group pull setup is successful; false otherwise, such as when the array is empty or a group pull is already active.
+	 * @param ActorsToPull The array of actors to include in the group pull. Only valid, non-null actors
+	 *                     not including the player will be considered.
+	 * @param TargetCentroidOffsetFromPlayer Specifies an offset vector relative to the player that determines
+	 *                                       the desired location of the group pull target centroid.
+	 * @return True if the preparation for group pull succeeds, otherwise false. Reasons for failure
+	 *         may include an already active group pull, an empty actor list, or invalid conditions such as
+	 *         missing target data.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Abilities|Direct Group Pull")
-	bool PrepareGroupPull(const TArray<AActor*>& ActorsToPull, FVector TargetCentroidOffsetFromPlayer);
+	bool PrepareGroupPull(const TArray<AActor*>& ActorsToPull,
+	                      const FVector TargetCentroidOffsetFromPlayer = FVector::ZeroVector);
 
 	/**
 	 * Updates the interpolation progress for group pulling, adjusting actor positions smoothly towards a target location.
@@ -239,9 +250,8 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Abilities|Direct Group Pull")
 	void FinishGroupPull();
-	
+
 protected:
-	
 	/**
 	 * Handles the event when an animation montage has finished playing.
 	 * This function is triggered whenever the montage completes or is interrupted.
@@ -261,9 +271,8 @@ protected:
 	FVector Pull_Group_InitialWorldCentroid;
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Abilities|Direct Group Pull")
-	FVector Pull_Group_TargetWorldCentroid; 
+	FVector Pull_Group_TargetWorldCentroid;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Abilities|Direct Group Pull")
 	bool bIsGroupPullActive;
-	
 };
