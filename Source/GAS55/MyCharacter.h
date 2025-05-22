@@ -35,6 +35,22 @@ struct FCombatAnimationPair
 	}
 };
 
+USTRUCT(BlueprintType)
+struct FPulledActorGroupInfo
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TWeakObjectPtr<AActor> Actor;
+
+	UPROPERTY()
+	FVector InitialOffsetFromCentroid;
+
+	FPulledActorGroupInfo() : Actor(nullptr), InitialOffsetFromCentroid(FVector::ZeroVector) {}
+	FPulledActorGroupInfo(AActor* InActor, const FVector& InOffset)
+		: Actor(InActor), InitialOffsetFromCentroid(InOffset) {}
+};
+
 UCLASS()
 class GAS55_API AMyCharacter : public ACharacter, public ICombatInterface
 {
@@ -45,7 +61,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
-
+	
 	// --- Combat Properties ---
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Animation Data")
 	TMap<FName, FCombatAnimationPair> CombatAnimationDatabase;
@@ -64,6 +80,15 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat")
 	float AttackDetectionAngle = 45.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat")
+	float BaseMagnitude = 1000.0f;
+	
+	UPROPERTY(EditDefaultsOnly, Category = "Combat")
+	bool bShouldScaleWithDistance = true;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat")
+	float DistScaleFactor = 0.5f;
 
 	// --- End Combat Properties ---
 
@@ -102,7 +127,7 @@ public:
 	/**
 	 * Executes an attack action for the character based on a provided attack code.
 	 * Determines the appropriate attack animation and potential targets within range and selection criteria.
-	 * Plays the attack animation if a valid montage is found, and logs the action performed.
+	 * Plays the attack animation if a valid montage is found and logs the action performed.
 	 *
 	 * @param AttackCode The identifier of the attack to be executed, corresponding to an entry in the CombatAnimationDatabase.
 	 */
@@ -135,10 +160,31 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable)
 	void ApplyVictimRelativeTransform(AMyCharacter* Victim, const FTransform& RelativeTransform) const;
-	
+
+	/**
+	 * Called to handle the application of a relative transform to the victim.
+	 * Intended for synchronizing the victim's position and rotation based on the specified transform.
+	 * This is typically used in animations or interactions involving a victim and an attacker.
+	 *
+	 * @param RelativeTransform The transform representing the position and orientation adjustment relative to the interaction.
+	 */
 	UFUNCTION(BlueprintImplementableEvent)
 	void OnHandleApplyVictimRelativeTransform(const FTransform& RelativeTransform);
 
+	/**
+	 * Event triggered to handle the start of pulling an object.
+	 * Can be implemented in Blueprints to define custom behavior when pulling begins.
+	 */
+	UFUNCTION(BlueprintImplementableEvent)
+	void OnHandleStartPullObject();
+
+	/**
+	 * Applies the relative transform to the current attack target during an interaction.
+	 * Adjusts the victim's position and rotation based on the calculated relative transform
+	 * by delegating the process to its handling function. This ensures the victim's alignment
+	 * with the attacker during the interaction animation.
+	 * Triggers additional effects or events such as starting a pull interaction sequence.
+	 */
 	UFUNCTION(BlueprintCallable)
 	void HandleApplyVictimRelativeTransform();
 
@@ -154,7 +200,48 @@ public:
 	 */
 	virtual void OnHitReceived_Implementation(AActor* Attacker, UAnimMontage* VictimReactionMontageToPlay) override;
 
+	/**
+	 * Finds and returns all actors within a specified spherical radius that satisfy certain criteria.
+	 * The actors must match the required interface (if specified) and do not include the current object or its attack target.
+	 * Optionally, debug visualization can be enabled to display the detection results.
+	 *
+	 * @param SphereRadius The radius of the sphere used to find overlapping actors.
+	 * @param RequiredInterface The interface that the actors must implement to be considered valid results. Pass null to disable this check.
+	 * @param bEnableDebugDraw If true, debug drawing for the sphere and detected actors will be enabled for visualization.
+	 * @return An array of actors within the specified sphere radius that match the given criteria.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Abilities|Direct Group Pull")
+	TArray<AActor*> FindActorsInSphereToPull(float SphereRadius, TSubclassOf<UInterface> RequiredInterface, bool bEnableDebugDraw);
+
+	/**
+	 * Prepares a group of actors for a coordinated pull action by calculating the initial and target centroids.
+	 * Ensures that the actors are valid and generates relative offsets for each actor's position from the initial group centroid.
+	 *
+	 * @param ActorsToPull The array of actors that will be part of the group pull. Invalid actors and the caller itself are excluded.
+	 * @param TargetCentroidOffsetFromPlayer Offset relative to the caller's location to compute the target centroid for the group pull.
+	 * @return True if the group pull setup is successful; false otherwise, such as when the array is empty or a group pull is already active.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Abilities|Direct Group Pull")
+	bool PrepareGroupPull(const TArray<AActor*>& ActorsToPull, FVector TargetCentroidOffsetFromPlayer);
+
+	/**
+	 * Updates the interpolation progress for group pulling, adjusting actor positions smoothly towards a target location.
+	 * Applies a lerp operation on actors in the group based on the provided alpha value.
+	 *
+	 * @param Alpha The interpolation factor ranging between 0.0 and 1.0, where 0.0 represents the initial state and 1.0 represents the fully transitioned state.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Abilities|Direct Group Pull")
+	void UpdateGroupPullLerp(float Alpha);
+
+	/**
+	 * Finalizes the group pull operation by resetting relevant state variables and clearing active pull data.
+	 * Ensures that the group pull process is properly concluded and the character is no longer engaged in a pull action.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Abilities|Direct Group Pull")
+	void FinishGroupPull();
+	
 protected:
+	
 	/**
 	 * Handles the event when an animation montage has finished playing.
 	 * This function is triggered whenever the montage completes or is interrupted.
@@ -166,4 +253,17 @@ protected:
 	 */
 	UFUNCTION()
 	void OnMontageEndedEvent(UAnimMontage* Montage, bool bInterrupted);
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Abilities|Direct Group Pull")
+	TArray<FPulledActorGroupInfo> ActivelyPulledActors;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Abilities|Direct Group Pull")
+	FVector Pull_Group_InitialWorldCentroid;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Abilities|Direct Group Pull")
+	FVector Pull_Group_TargetWorldCentroid; 
+
+	UPROPERTY(BlueprintReadOnly, Category = "Abilities|Direct Group Pull")
+	bool bIsGroupPullActive;
+	
 };

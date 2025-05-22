@@ -8,9 +8,13 @@
 #include "Interface/CombatInterface.h"
 #include "Kismet/GameplayStatics.h"
 
-AMyCharacter::AMyCharacter(): CurrentAttackTarget(nullptr)
+AMyCharacter::AMyCharacter(): CurrentAttackTarget(nullptr), Pull_Group_InitialWorldCentroid(),
+                              Pull_Group_TargetWorldCentroid()
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	bIsGroupPullActive = false;
+	bIsDrawDebug = false;
 }
 
 void AMyCharacter::BeginPlay()
@@ -172,7 +176,7 @@ AMyCharacter* AMyCharacter::SelectBestAttackTargetFromList(const TArray<AMyChara
 	{
 		UE_LOG(LogTemp, Warning,
 		       TEXT(
-			       "SelectBestAttackTargetFromList: No valid targets in PotentialTargets after checking for nullptrs. Returning nullptr."
+			       "SelectBestAttackTargetFromList: No valid targets in PotentialTargets after checking for nullptr. Returning nullptr."
 		       ));
 		return nullptr;
 	}
@@ -342,15 +346,15 @@ void AMyCharacter::PerformAttack(const FName& AttackCode)
 
 	CurrentAttackTarget = BestTarget;
 
-    const FVector MyLocation = GetActorLocation();
-    const FVector TargetLocation = CurrentAttackTarget->GetActorLocation();
-    
-    const FVector DirectionToTarget = (TargetLocation - MyLocation).GetSafeNormal();
-    const FRotator LookAtRotationForSelf = DirectionToTarget.Rotation();
-    
-    FRotator CurrentSelfActorRotation = GetActorRotation();
-    CurrentSelfActorRotation.Yaw = LookAtRotationForSelf.Yaw;
-    SetActorRotation(CurrentSelfActorRotation);
+	const FVector MyLocation = GetActorLocation();
+	const FVector TargetLocation = CurrentAttackTarget->GetActorLocation();
+
+	const FVector DirectionToTarget = (TargetLocation - MyLocation).GetSafeNormal();
+	const FRotator LookAtRotationForSelf = DirectionToTarget.Rotation();
+
+	FRotator CurrentSelfActorRotation = GetActorRotation();
+	CurrentSelfActorRotation.Yaw = LookAtRotationForSelf.Yaw;
+	SetActorRotation(CurrentSelfActorRotation);
 	if (AController* MyController = GetController())
 	{
 		FRotator CurrentControllerRotation = MyController->GetControlRotation();
@@ -358,12 +362,12 @@ void AMyCharacter::PerformAttack(const FName& AttackCode)
 		CurrentControllerRotation.Pitch = LookAtRotationForSelf.Pitch;
 		MyController->SetControlRotation(CurrentControllerRotation);
 	}
-    const FVector DirectionFromTargetToSelf = (MyLocation - TargetLocation).GetSafeNormal();
-    FRotator LookAtRotationForTarget = DirectionFromTargetToSelf.Rotation();
+	const FVector DirectionFromTargetToSelf = (MyLocation - TargetLocation).GetSafeNormal();
+	FRotator LookAtRotationForTarget = DirectionFromTargetToSelf.Rotation();
 
-    FRotator CurrentTargetActorRotation = CurrentAttackTarget->GetActorRotation();
-    CurrentTargetActorRotation.Yaw = LookAtRotationForTarget.Yaw;
-    CurrentAttackTarget->SetActorRotation(CurrentTargetActorRotation);
+	FRotator CurrentTargetActorRotation = CurrentAttackTarget->GetActorRotation();
+	CurrentTargetActorRotation.Yaw = LookAtRotationForTarget.Yaw;
+	CurrentAttackTarget->SetActorRotation(CurrentTargetActorRotation);
 
 	CurrentExecutingComboName = AttackCode;
 
@@ -389,7 +393,7 @@ void AMyCharacter::PerformAttack(const FName& AttackCode)
 				TargetCapsule->IgnoreActorWhenMoving(this, true);
 
 				UE_LOG(LogTemp, Log, TEXT("[%s::%hs] - Set %s and %s to ignore each other's movement collision."),
-					*GetName(),__FUNCTION__, *GetName(), *CurrentAttackTarget->GetName());
+				       *GetName(), __FUNCTION__, *GetName(), *CurrentAttackTarget->GetName());
 			}
 		}
 		else
@@ -450,8 +454,9 @@ void AMyCharacter::ApplyVictimRelativeTransform(AMyCharacter* Victim, const FTra
 	// Victim->SetActorLocationAndRotation(VictimTargetWorldTransform.GetLocation(),
 	// 									VictimTargetWorldTransform.GetRotation(),
 	// 									false, nullptr, ETeleportType::TeleportPhysics);
-	const FTransform TargetTransform = FTransform(VictimTargetWorldTransform.GetRotation(), VictimTargetWorldTransform.GetLocation(),
-	               FVector::ZeroVector);
+	const FTransform TargetTransform = FTransform(VictimTargetWorldTransform.GetRotation(),
+	                                              VictimTargetWorldTransform.GetLocation(),
+	                                              FVector::ZeroVector);
 	Victim->TargetRelativeTransform = TargetTransform;
 
 	UE_LOG(LogTemp, Log, TEXT("Teleported Victim %s to relative transform for combo %s"), *Victim->GetName(),
@@ -467,6 +472,8 @@ void AMyCharacter::HandleApplyVictimRelativeTransform()
 		// CurrentAttackTarget->GetMesh()->SetWorldLocationAndRotation(RelativeTransform.GetLocation(), RelativeTransform.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
 		CurrentAttackTarget->OnHandleApplyVictimRelativeTransform(RelativeTransform);
 	}
+
+	OnHandleStartPullObject();
 }
 
 void AMyCharacter::OnHitReceived_Implementation(AActor* Attacker, UAnimMontage* VictimReactionMontageToPlay)
@@ -514,6 +521,161 @@ void AMyCharacter::OnHitReceived_Implementation(AActor* Attacker, UAnimMontage* 
 	}
 }
 
+TArray<AActor*> AMyCharacter::FindActorsInSphereToPull(const float SphereRadius, const TSubclassOf<UInterface> RequiredInterface,
+	const bool bEnableDebugDraw)
+{
+	TArray<AActor*> FoundActors;
+	const FVector SelfLocation = CurrentAttackTarget->GetActorLocation();
+
+	TArray<FOverlapResult> OverlapResults;
+	const FCollisionShape SphereShape = FCollisionShape::MakeSphere(SphereRadius);
+    
+	const FCollisionObjectQueryParams ObjectQueryParams(ECC_TO_BITFIELD(ECC_WorldDynamic) | ECC_TO_BITFIELD(ECC_Pawn));
+
+	const bool bOverlap = GetWorld()->OverlapMultiByObjectType(
+		OverlapResults,
+		SelfLocation,
+		FQuat::Identity,
+		ObjectQueryParams,
+		SphereShape
+	);
+
+	if (bEnableDebugDraw)
+	{
+		DrawDebugSphere(GetWorld(), SelfLocation, SphereRadius, 24, FColor::Blue, false, 5.0f, 0, 2.0f);
+	}
+
+	if (bOverlap)
+	{
+		for (const FOverlapResult& Result : OverlapResults)
+		{
+			AActor* OverlappedActor = Result.GetActor();
+			if (OverlappedActor && OverlappedActor != this && OverlappedActor != CurrentAttackTarget)
+			{
+				bool bInterfaceMatch = true;
+				if (RequiredInterface)
+				{
+					bInterfaceMatch = OverlappedActor->GetClass()->ImplementsInterface(RequiredInterface);
+				}
+
+				if (bInterfaceMatch)
+				{
+					FoundActors.Add(OverlappedActor);
+					if (bEnableDebugDraw)
+					{
+						DrawDebugLine(GetWorld(), SelfLocation, OverlappedActor->GetActorLocation(), FColor::Green, false, 5.0f, 0, 1.0f);
+					}
+				}
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("[%s::FindActorsInSphereToPull] Found %d actors."), *GetName(), FoundActors.Num());
+	return FoundActors;
+}
+
+bool AMyCharacter::PrepareGroupPull(const TArray<AActor*>& ActorsToPull, FVector TargetCentroidOffsetFromPlayer)
+{
+	    if (bIsGroupPullActive)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] A group pull is already active."), *GetName());
+        return false;
+    }
+    if (ActorsToPull.IsEmpty())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] ActorsToPull array is empty."), *GetName());
+        return false;
+    }
+
+    ActivelyPulledActors.Empty();
+    Pull_Group_InitialWorldCentroid = FVector::ZeroVector;
+    int32 ValidActorCount = 0;
+
+    for (const AActor* Actor : ActorsToPull)
+    {
+        if (Actor && Actor != this) 
+        {
+            Pull_Group_InitialWorldCentroid += Actor->GetActorLocation();
+            ValidActorCount++;
+        }
+    }
+
+    if (ValidActorCount == 0)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] No valid actors to form a group."), *GetName());
+        return false;
+    }
+    Pull_Group_InitialWorldCentroid /= ValidActorCount;
+
+    for (AActor* Actor : ActorsToPull)
+    {
+        if (Actor && Actor != this)
+        {
+            FVector Offset = Actor->GetActorLocation() - Pull_Group_InitialWorldCentroid;
+            ActivelyPulledActors.Add(FPulledActorGroupInfo(Actor, Offset));
+        }
+    }
+    
+    if (ActivelyPulledActors.IsEmpty()) { 
+        UE_LOG(LogTemp, Warning, TEXT("[%s::PrepareGroupPull] No actors were ultimately added to the pull list."), *GetName());
+        return false;
+    }
+
+    Pull_Group_TargetWorldCentroid = GetActorLocation() + TargetCentroidOffsetFromPlayer;
+    
+    bIsGroupPullActive = true;
+    UE_LOG(LogTemp, Log, TEXT("[%s::PrepareGroupPull] Prepared pull for %d actors. InitialCentroid: %s, TargetCentroid: %s"),
+        *GetName(), ActivelyPulledActors.Num(), *Pull_Group_InitialWorldCentroid.ToString(), *Pull_Group_TargetWorldCentroid.ToString());
+    return true;
+}
+
+void AMyCharacter::UpdateGroupPullLerp(float Alpha)
+{
+	if (!bIsGroupPullActive || ActivelyPulledActors.IsEmpty())
+	{
+		return;
+	}
+
+	const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+
+	const FVector CurrentLerpedCentroid = FMath::Lerp(Pull_Group_InitialWorldCentroid, Pull_Group_TargetWorldCentroid, ClampedAlpha);
+
+	if (bIsDrawDebug) 
+	{
+		DrawDebugSphere(GetWorld(), Pull_Group_InitialWorldCentroid, 50.f, 12, FColor::Red, false, -1, 0, 2.f); 
+		DrawDebugSphere(GetWorld(), Pull_Group_TargetWorldCentroid, 50.f, 12, FColor::Blue, false, -1, 0, 2.f); 
+		DrawDebugSphere(GetWorld(), CurrentLerpedCentroid, 40.f, 12, FColor::Yellow, false, -1, 0, 3.f);
+	}
+	
+	for (int32 i = ActivelyPulledActors.Num() - 1; i >= 0; --i) 
+	{
+		const FPulledActorGroupInfo& PulledInfo = ActivelyPulledActors[i];
+		if (PulledInfo.Actor.IsValid())
+		{
+			AActor* TargetActor = PulledInfo.Actor.Get();
+			FVector NewActorLocation = CurrentLerpedCentroid + PulledInfo.InitialOffsetFromCentroid;
+			TargetActor->SetActorLocation(NewActorLocation, false, nullptr, ETeleportType::TeleportPhysics);
+		}
+		else
+		{
+			ActivelyPulledActors.RemoveAt(i);
+			UE_LOG(LogTemp, Warning, TEXT("[%s::UpdateGroupPullLerp] Pulled actor became invalid, removed from list."), *GetName());
+		}
+	}
+}
+
+void AMyCharacter::FinishGroupPull()
+{
+	if (bIsGroupPullActive)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[%s::FinishGroupPull] Group pull finished. Clearing active pull state."), *GetName());
+	}
+	bIsGroupPullActive = false;
+	ActivelyPulledActors.Empty();
+	Pull_Group_InitialWorldCentroid = FVector::ZeroVector;
+	Pull_Group_TargetWorldCentroid = FVector::ZeroVector;
+}
+
 void AMyCharacter::OnMontageEndedEvent(UAnimMontage* Montage, bool bInterrupted)
 {
 	if (!CurrentExecutingComboName.IsNone())
@@ -528,7 +690,7 @@ void AMyCharacter::OnMontageEndedEvent(UAnimMontage* Montage, bool bInterrupted)
 			if (CurrentAttackTarget)
 			{
 				UE_LOG(LogTemp, Log, TEXT("%s performing '%s'. Target: %s"), *GetName(),
-					   *CurrentExecutingComboName.ToString(), *CurrentAttackTarget->GetName());
+				       *CurrentExecutingComboName.ToString(), *CurrentAttackTarget->GetName());
 
 				UCapsuleComponent* SelfCapsule = GetCapsuleComponent();
 				UCapsuleComponent* TargetCapsule = CurrentAttackTarget->GetCapsuleComponent();
@@ -539,23 +701,24 @@ void AMyCharacter::OnMontageEndedEvent(UAnimMontage* Montage, bool bInterrupted)
 					TargetCapsule->IgnoreActorWhenMoving(this, true);
 
 					UE_LOG(LogTemp, Log, TEXT("[%s::%hs] - Set %s and %s to ignore each other's movement collision."),
-						*GetName(),__FUNCTION__, *GetName(), *CurrentAttackTarget->GetName());
+					       *GetName(), __FUNCTION__, *GetName(), *CurrentAttackTarget->GetName());
 				}
 				else
 				{
-					if (!SelfCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - SelfCapsule is NULL."), *GetName(), __FUNCTION__);
-					if (!TargetCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - TargetCapsule on %s is NULL."), *GetName(), __FUNCTION__, *CurrentAttackTarget->GetName());
-				}		
+					if (!SelfCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - SelfCapsule is NULL."), *GetName(),
+					                         __FUNCTION__);
+					if (!TargetCapsule) UE_LOG(LogTemp, Error, TEXT("[%s::%hs] - TargetCapsule on %s is NULL."),
+					                           *GetName(), __FUNCTION__, *CurrentAttackTarget->GetName());
+				}
 			}
 			else
 			{
 				UE_LOG(LogTemp, Log, TEXT("%s performing '%s' (no specific target)."), *GetName(),
-					   *CurrentExecutingComboName.ToString());
+				       *CurrentExecutingComboName.ToString());
 			}
-			
+
 			CurrentAttackTarget = nullptr;
 			CurrentExecutingComboName = NAME_None;
 		}
 	}
 }
-
